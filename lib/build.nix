@@ -351,7 +351,14 @@
                             ides leave --token "$IDES_LEASE_TOKEN"
                           fi
                         }
-                        trap _ides_leave EXIT
+                        # Preserve any existing EXIT trap (e.g. direnv's
+                        # internal trap) by wrapping it with _ides_leave.
+                        _ides_prev_exit_trap=$(trap -p EXIT | sed "s/^trap -- '//; s/' EXIT$//")
+                        _ides_leave_wrapper() {
+                          _ides_leave
+                          [ -n "''${_ides_prev_exit_trap:-}" ] && eval "$_ides_prev_exit_trap"
+                        }
+                        trap _ides_leave_wrapper EXIT
                       ''
                     else
                       "";
