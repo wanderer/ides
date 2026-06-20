@@ -338,7 +338,29 @@
                   leaseRun =
                     if monitorEnabled then
                       ''
-                        _IDES_ENTER_OUTPUT="$(ides enter --kind shell --root "$PWD" --pid $$)"
+                        # Detect if we're running inside direnv's ephemeral
+                        # bash subprocess. direnv runs .envrc in a bash that
+                        # exits immediately after evaluation, which would
+                        # release the lease and stop services. When direnv
+                        # is detected, we:
+                        # 1. Walk up the process tree to find the real shell
+                        #    PID (fish/zsh/bash) for the lease, so the lease
+                        #    stays alive for the lifetime of the user's shell.
+                        # 2. Skip the EXIT-trap cleanup — the daemon's
+                        #    prune_dead will release the lease and stop
+                        #    services when the real shell exits.
+                        _IDES_SHELL_PID=$$
+                        _IDES_IN_DIRENV=0
+                        if [ -n "''${DIRENV_DIR:-}" ] || [ -n "''${DIRENV_DIFF:-}" ]; then
+                          _IDES_IN_DIRENV=1
+                          # Walk up: $$ (bash) → direnv → real shell
+                          _IDES_PARENT_PID=$(ps --no-header -o ppid:1 "$$" 2>/dev/null | tr -d ' ')
+                          if [ -n "$_IDES_PARENT_PID" ]; then
+                            _IDES_SHELL_PID=$(ps --no-header -o ppid:1 "$_IDES_PARENT_PID" 2>/dev/null | tr -d ' ')
+                            _IDES_SHELL_PID="''${_IDES_SHELL_PID:-$_IDES_PARENT_PID}"
+                          fi
+                        fi
+                        _IDES_ENTER_OUTPUT="$(ides enter --kind shell --root "$PWD" --pid "$_IDES_SHELL_PID")"
                         _IDES_ENTER_STATUS=$?
                         if [ "$_IDES_ENTER_STATUS" -ne 0 ]; then
                           unset _IDES_ENTER_OUTPUT
@@ -351,14 +373,26 @@
                             ides leave --token "$IDES_LEASE_TOKEN"
                           fi
                         }
-                        # Preserve any existing EXIT trap (e.g. direnv's
-                        # internal trap) by wrapping it with _ides_leave.
-                        _ides_prev_exit_trap=$(trap -p EXIT | sed "s/^trap -- '//; s/' EXIT$//")
-                        _ides_leave_wrapper() {
-                          _ides_leave
-                          [ -n "''${_ides_prev_exit_trap:-}" ] && eval "$_ides_prev_exit_trap"
-                        }
-                        trap _ides_leave_wrapper EXIT
+                        if [ "$_IDES_IN_DIRENV" -eq 1 ]; then
+                          # Inside direnv: don't release the lease on EXIT.
+                          # The daemon's prune_dead will clean up when the
+                          # real shell (whose PID we registered) exits.
+                          # Still chain to any existing EXIT trap (e.g.
+                          # direnv's internal trap for env capture).
+                          _ides_prev_exit_trap=$(trap -p EXIT | sed "s/^trap -- '//; s/' EXIT$//")
+                          if [ -n "$_ides_prev_exit_trap" ]; then
+                            eval "$_ides_prev_exit_trap"
+                          fi
+                        else
+                          # Normal shell: preserve any existing EXIT trap and
+                          # chain _ides_leave into it.
+                          _ides_prev_exit_trap=$(trap -p EXIT | sed "s/^trap -- '//; s/' EXIT$//")
+                          _ides_leave_wrapper() {
+                            _ides_leave
+                            [ -n "''${_ides_prev_exit_trap:-}" ] && eval "$_ides_prev_exit_trap"
+                          }
+                          trap _ides_leave_wrapper EXIT
+                        fi
                       ''
                     else
                       "";
