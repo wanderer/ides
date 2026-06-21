@@ -360,12 +360,23 @@
                             _IDES_SHELL_PID="''${_IDES_SHELL_PID:-$_IDES_PARENT_PID}"
                           fi
                         fi
-                        _IDES_ENTER_OUTPUT="$(ides enter --kind shell --root "$PWD" --pid "$_IDES_SHELL_PID")"
-                        _IDES_ENTER_STATUS=$?
+                        _IDES_ENTER_OUTPUT=""
+                        _IDES_ENTER_STATUS=1
+                        for _ in 1 2 3 4 5; do
+                          _IDES_ENTER_OUTPUT="$(ides enter --kind shell --root "$PWD" --pid "$_IDES_SHELL_PID" 2>/dev/null)"
+                          _IDES_ENTER_STATUS=$?
+                          if [ "$_IDES_ENTER_STATUS" -eq 0 ]; then
+                            break
+                          fi
+                          sleep 0.2
+                        done
                         if [ "$_IDES_ENTER_STATUS" -ne 0 ]; then
                           unset _IDES_ENTER_OUTPUT
-                          return "$_IDES_ENTER_STATUS" 2>/dev/null || exit "$_IDES_ENTER_STATUS"
-                        fi
+                          # Don't fail the entire shell if ides enter fails —
+                          # services just won't be managed. The user can run
+                          # `ides run` manually.
+                          _IDES_IN_DIRENV=0
+                        else
                         export IDES_LEASE_TOKEN="$_IDES_ENTER_OUTPUT"
                         unset _IDES_ENTER_OUTPUT _IDES_ENTER_STATUS
                         _ides_leave() {
