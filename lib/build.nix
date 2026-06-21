@@ -404,6 +404,7 @@
                           }
                           trap _ides_leave_wrapper EXIT
                         fi
+                        fi
                       ''
                     else
                       "";
