@@ -175,6 +175,7 @@ pub fn serve(manifest: &Manifest, manifest_path: &Path) -> Result<()> {
         .map_err(|err| format!("failed to set daemon socket nonblocking: {err}"))?;
 
     let mut idle_since = Instant::now();
+    let mut first_iteration = true;
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -186,13 +187,17 @@ pub fn serve(manifest: &Manifest, manifest_path: &Path) -> Result<()> {
             Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                 let pruned = leases::prune_dead(&manifest.set_id)?;
                 let active = leases::active_count(&manifest.set_id)?;
-                if active == 0 && pruned > 0 {
+                // Only exit if we pruned dead leases AND this isn't the first
+                // iteration. On startup, stale leases from previous runs may
+                // exist; pruning them shouldn't cause an immediate exit.
+                if !first_iteration && active == 0 && pruned > 0 {
                     systemd::down(manifest, &[])?;
                     break;
                 }
                 if active == 0 && idle_since.elapsed() > Duration::from_secs(10) {
                     break;
                 }
+                first_iteration = false;
                 thread::sleep(Duration::from_millis(100));
             }
             Err(err) => return Err(format!("failed to accept daemon client: {err}")),
